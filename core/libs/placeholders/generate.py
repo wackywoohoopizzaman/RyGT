@@ -51,6 +51,36 @@ static int running_gt7(void) {
 }'''
 
 
+# FIX-RT-019: conversions can import these SaveData functions through libSceMbus.
+# Match the provider signatures in prx/libSceSaveData/Export.cpp, including its guest ABI.
+# Structures are opaque here; only the provider reads their contents.
+SAVE_DATA_ARGUMENTS = {
+    '0z45PIH+SNI': 'const void* mount, void* result',  # Mount2
+    '85zul--eGXs': 'const void* mount, uint32_t type, const void* data, size_t size',  # SetParam
+    'BMR4F-Uek3E': 'const void* mount',  # Umount
+    'RQOqDbk3bSU': 'const void* check',  # CheckBackupData
+    'S1GkePI17zQ': 'const void* request',  # Delete
+    'VwadwBBBJ80': 'const void* mount',  # UmountWithBackup
+    'XgvSuIdnMlw': 'const void* mount, uint32_t type, void* data, size_t size, size_t* read',  # GetParam
+    'c88Yy54Mx0w': 'const void* mount, const void* icon',  # SaveIcon
+    'dyIhnXq-0SM': 'const void* query, void* result',  # DirNameSearch
+    'lU9YRFsgwSU': 'const void* restore',  # RestoreBackupData
+}
+
+
+def save_data_forwarder(index, nid):
+    signature = SAVE_DATA_ARGUMENTS[nid]
+    arguments = ', '.join(param.rsplit(' ', 1)[1] for param in signature.split(', '))
+    return f'''__attribute__((sysv_abi)) int s{index}({signature}) {{
+    typedef __attribute__((sysv_abi)) int (*Provider)({signature});
+    HMODULE module = GetModuleHandleW(L"libSceSaveData.prx");
+    Provider call = module ? (Provider)GetProcAddress(module, "{nid}") : NULL;
+    if (call) return call({arguments});
+    note({index});
+    return (int32_t)0x809F000Bu; /* SCE_SAVE_DATA_ERROR_INTERNAL */
+}}'''
+
+
 def main(listing, source, definition):
     library = Path(listing).stem
     entries = []
@@ -77,7 +107,10 @@ def main(listing, source, definition):
                      'fputs(names[i], stderr); fputc(10, stderr); fflush(stderr); } }')
         if any(value is not None for _, _, value, _ in entries):
             lines.append(GAME_CHECK)
-        for i, (_, _, value, wait) in enumerate(entries):
+        for i, (owner, nid, value, wait) in enumerate(entries):
+            if library == 'libSceMbus' and owner == 'libSceSaveData':
+                lines.append(save_data_forwarder(i, nid))
+                continue
             if wait:
                 # FIX-RT-003: waits as the real call does for its timeout (at most 100 ms), no events.
                 lines.append(f'__attribute__((sysv_abi)) int64_t s{i}(const int64_t* tv) {{ note({i}); '

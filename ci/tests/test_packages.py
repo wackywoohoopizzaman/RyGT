@@ -207,6 +207,27 @@ class PackageTests(unittest.TestCase):
                         import hashlib
                         self.assertEqual(hashlib.sha256(z.read(prefix + name)).hexdigest(), digest)
 
+    def test_openxr_package_records_loader_and_includes_probe(self):
+        with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
+            self.fixture()
+            folder = Path('artifacts/renderer')
+            sdk = json.loads((ROOT / 'ci/runtime-toolchain.json').read_text())['openxr_sdk']
+            profile = folder / 'BUILD-PROFILE.json'
+            profile.write_text(json.dumps(dict(json.loads(profile.read_text()), openxr_sdk=sdk['commit'])))
+            with (folder / 'libSceVideoOut.prx').open('ab') as renderer:
+                renderer.write(b'SHARED_OPENXR\x00')
+            (folder / 'OpenXR-LICENSE.txt').write_text('test license')
+            (folder / 'rygt_openxr_info.exe').write_bytes(pe())
+            self.rehash(folder)
+            result = pkg.assemble(SHA, 'Release', 'ci', '')
+            archive = Path('dist') / result['archive']
+            with zipfile.ZipFile(archive) as package:
+                prefix = archive.stem + '/'
+                info = json.loads(package.read(prefix + 'BUILD_INFO.txt'))
+                self.assertEqual(info['openxr_sdk'], sdk)
+                self.assertEqual(package.read(prefix + 'OpenXR-LICENSE.txt'), b'test license')
+                self.assertIn(prefix + 'tools/rygt_openxr_info.exe', package.namelist())
+
     def test_both_flavors_require_expected_renderer(self):
         with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp):
             self.fixture()
