@@ -50,7 +50,8 @@ namespace RyGT
             // GPU.fsr_enabled, fsr3_enabled, dlss_enabled, rcas_enabled and upscale_quality (the game
             // gets the last as RYGT_UPSCALE_QUALITY).
             var upscaling = Section(graphicsPage, "Upscaling");
-            if (SwitchWalker.KnownNames(root).Contains("SHADGT_OPENXR_COCKPIT"))
+            var rendererImage = ReadRendererImage();
+            if (NamesSwitch(rendererImage, "SHADGT_OPENXR_COCKPIT"))
                 AddGt7HeadsetSettings(Section(graphicsPage, "OpenXR headset"));
             bool fsr3Installed = File.Exists(Path.Combine(root, "amd_fidelityfx_vk.dll"));
             string dlssDir = Path.Combine(root, "dlss");
@@ -112,7 +113,7 @@ namespace RyGT
             var detailRow = comboRow("Texture detail", detail, detailNote);
             upscaling.Controls.Add(detailRow);
             upscaling.Controls.Add(detailNote);
-            bool detailKnown = RendererReads("RYGT_DLSS_TEMPORAL_MIP_EXTRA");
+            bool detailKnown = NamesSwitch(rendererImage, "RYGT_DLSS_TEMPORAL_MIP_EXTRA");
 
             // NVIDIA files: the Download button, the status of what is there, and Add from a folder.
             var dlssStatus = noteLabel();
@@ -1170,12 +1171,12 @@ namespace RyGT
         }
 
 
-        /// Whether the installed renderer (libs\libSceVideoOut.prx) names this switch, so reads it (FEAT-GT7-181):
-        /// an option for a switch an older renderer does not have would do nothing.
-        bool RendererReads(string name)
+        // FEAT-RT-021: both capability checks inspect the same renderer image while building the page.
+        byte[] ReadRendererImage()
         {
-            try { return NamesSwitch(File.ReadAllBytes(Path.Combine(root, SwitchWalker.RendererFile)), name); }
-            catch { return false; }
+            try { return File.ReadAllBytes(Path.Combine(root, SwitchWalker.RendererFile)); }
+            catch (IOException) { return new byte[0]; }
+            catch (UnauthorizedAccessException) { return new byte[0]; }
         }
 
 
