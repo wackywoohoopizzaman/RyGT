@@ -32,6 +32,9 @@ timeval and it sleeps that long (at most 100 ms) before returning 0. `libSceUsbd
 (`sceUsbdHandleEventsTimeout`) is one: GT7's `USBEV` thread calls it in a loop, and while it returned at
 once that thread spun one core for the whole session.
 
+FIX-RT-018: the wheel module in the CUSA24769 01.00 conversion also imports
+`libSceUsbd EkqGLxWC-S0`. Export it from the USB placeholder so the module can load.
+
 To implement one of these libraries for real, add it under `core/libs/prx/` and delete its list here.
 
 `libSceSsl2.prx` is not a placeholder: it is the PS4's second module name for the libSceSsl API, so the build
