@@ -11,9 +11,9 @@ def run(*args):
     subprocess.run(args, check=True)
 
 
-def prepare(destination):
+def prepare(destination, policy=None):
     root = Path(__file__).resolve().parent.parent
-    source = json.loads((root / "renderer/source.json").read_text(encoding="utf-8"))
+    source = json.loads((policy or root / "renderer/source.json").read_text(encoding="utf-8"))
     revision = source["commit"]
     expected = os.environ.get("RENDERER_SHA")
     if expected and not re.fullmatch(r"[0-9a-f]{40}", expected):
@@ -52,4 +52,6 @@ def prepare(destination):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("destination")
-    prepare(parser.parse_args().destination)
+    parser.add_argument("--renderer-policy", type=Path)
+    args = parser.parse_args()
+    prepare(args.destination, args.renderer_policy)

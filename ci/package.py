@@ -1,4 +1,5 @@
 """Assemble redistributable Windows package from same-pipeline build artifacts."""
+import argparse
 import hashlib
 import importlib.util
 import json
@@ -224,13 +225,13 @@ def check_package_imports(stage):
         raise RuntimeError('Unresolved imports between packaged modules:\n  ' + '\n  '.join(missing[:20]))
 
 
-def assemble(commit, flavor, channel, suffix):
+def assemble(commit, flavor, channel, suffix, renderer_policy=None):
     launcher_folder = Path('artifacts/launcher' + suffix)
     renderer_folder = Path('artifacts/renderer' + suffix)
     launcher = verify_bundle(launcher_folder, 'RyGTLauncher.exe', commit, flavor)
     renderer = verify_bundle(renderer_folder, 'libSceVideoOut.prx', commit, flavor)
     root = Path(__file__).resolve().parent.parent
-    pin = json.loads((root / 'renderer/source.json').read_text())
+    pin = json.loads((renderer_policy or root / 'renderer/source.json').read_text())
     source_file = verify_artifact(renderer_folder, 'CI-SOURCE.txt', commit, 'data')
     source = source_file.read_text(encoding='utf-8-sig')
     lines = source.splitlines()
@@ -371,7 +372,7 @@ def assemble(commit, flavor, channel, suffix):
     return dict(channel=channel, flavor=flavor, archive=result.name, sha256=digest, files=len(manifest)+1, renderer_commit=expected)
 
 
-def package(channels=None):
+def package(channels=None, renderer_policy=None):
     commit = os.environ['CI_COMMIT_SHA']
     if not re.fullmatch('[0-9a-f]{40}', commit): raise RuntimeError('Invalid source revision')
     if channels is None:
@@ -384,7 +385,7 @@ def package(channels=None):
         raise ValueError('Invalid CI package channel selection')
     requested = set(channels)
     channels = tuple(channel for channel in valid_channels if channel in requested)
-    variants = [assemble(commit, *variant) for variant in VARIANTS if variant[1] in channels]
+    variants = [assemble(commit, *variant, renderer_policy=renderer_policy) for variant in VARIANTS if variant[1] in channels]
     if len({variant['renderer_commit'] for variant in variants}) != 1:
         raise RuntimeError('Renderer revisions differ between package variants')
     (Path('dist') / 'CI-PACKAGES.json').write_text(json.dumps(dict(schema=2, commit=commit, renderer_commit=variants[0]['renderer_commit'], variants=variants), indent=2) + '\n')
@@ -392,4 +393,6 @@ def package(channels=None):
 
 
 if __name__ == '__main__':
-    package()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--renderer-policy', type=Path)
+    package(renderer_policy=parser.parse_args().renderer_policy)

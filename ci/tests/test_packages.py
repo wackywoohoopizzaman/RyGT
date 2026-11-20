@@ -214,17 +214,22 @@ class PackageTests(unittest.TestCase):
             sdk = json.loads((ROOT / 'ci/runtime-toolchain.json').read_text())['openxr_sdk']
             profile = folder / 'BUILD-PROFILE.json'
             profile.write_text(json.dumps(dict(json.loads(profile.read_text()), openxr_sdk=sdk['commit'])))
+            policy = Path('integration.json')
+            fork = 'https://example.invalid/fork.git'
+            policy.write_text(json.dumps({'repository': fork, 'branch': 'integration/gt7-vr', 'commit': RENDERER_SHA}))
+            (folder / 'CI-SOURCE.txt').write_text(fork + '\n' + RENDERER_SHA + '\n')
             with (folder / 'libSceVideoOut.prx').open('ab') as renderer:
                 renderer.write(b'SHARED_OPENXR\x00')
             (folder / 'OpenXR-LICENSE.txt').write_text('test license')
             (folder / 'rygt_openxr_info.exe').write_bytes(pe())
             self.rehash(folder)
-            result = pkg.assemble(SHA, 'Release', 'ci', '')
+            result = pkg.assemble(SHA, 'Release', 'ci', '', renderer_policy=policy)
             archive = Path('dist') / result['archive']
             with zipfile.ZipFile(archive) as package:
                 prefix = archive.stem + '/'
                 info = json.loads(package.read(prefix + 'BUILD_INFO.txt'))
                 self.assertEqual(info['openxr_sdk'], sdk)
+                self.assertEqual(info['renderer_source'].splitlines(), [fork, RENDERER_SHA])
                 self.assertEqual(package.read(prefix + 'OpenXR-LICENSE.txt'), b'test license')
                 self.assertIn(prefix + 'tools/rygt_openxr_info.exe', package.namelist())
 

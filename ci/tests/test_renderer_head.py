@@ -30,6 +30,21 @@ class RendererPolicyTests(unittest.TestCase):
                 self.assertIn(expected, [arg for call in commands.call_args_list for arg in call.args])
                 return calls.call_args_list
 
+    def test_explicit_integration_renderer_policy(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            policy = root / 'fork.json'
+            repo = 'https://example.invalid/fork.git'
+            policy.write_text(json.dumps(dict(repository=repo, branch='integration/gt7-vr', commit=SHA)))
+            destination = root / 'checkout'
+            with mock.patch.object(module, 'run') as commands, mock.patch.object(
+                    module.subprocess, 'check_output', return_value=SHA), mock.patch.dict(os.environ, {}, clear=True):
+                # The git-init mock supplies the directory a real init would make.
+                commands.side_effect = lambda *args: destination.mkdir() if args[1] == 'init' else None
+                module.prepare(destination, policy)
+            self.assertIn(mock.call('git', '-C', str(destination.resolve()), 'remote', 'add', 'origin', repo), commands.call_args_list)
+            self.assertEqual((destination / 'CI-SOURCE.txt').read_text().splitlines(), [repo, SHA])
+
     def test_head_resolves_once_or_uses_controller(self):
         calls=self.prepare('HEAD', {})
         self.assertEqual(sum('ls-remote' in call.args[0] for call in calls), 1)
