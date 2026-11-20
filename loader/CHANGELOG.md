@@ -6,6 +6,10 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
+## 0.3.12 - 2026-11-20
+
+* FIX-RT-017: Set up accepts stripped SELF files whose section table was removed.
+
 ## 0.3.11 - 2026-11-20
 
 * FIX-RT-016: GT7 shows its blue picture in a fresh RyGT package too. launcherackground.png and logo.png
