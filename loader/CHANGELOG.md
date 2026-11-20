@@ -6,6 +6,11 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
+## 0.3.13 - 2026-11-20
+
+* FEAT-RT-021: GT7 offers per-eye resolution, desktop mirroring, reconstruction, 2× frame
+  generation and Reflex with an OpenXR renderer. Stereo cockpit mode uses both eyes for visibility.
+
 ## 0.3.12 - 2026-11-20
 
 * FIX-RT-017: Set up accepts stripped SELF files whose section table was removed.

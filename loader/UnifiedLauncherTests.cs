@@ -95,6 +95,25 @@ namespace RyGT
 
         static void SettingsChecks(string root)
         {
+            var launch = new System.Diagnostics.ProcessStartInfo { UseShellExecute = false, Arguments = "profile=wheel" };
+            launch.EnvironmentVariables.Remove("SHARED_OPENXR");
+            launch.EnvironmentVariables.Remove("SHADGT_OPENXR_COCKPIT");
+            LoaderForm.ApplyGt7HeadsetSettings(launch, null);
+            Check(launch.EnvironmentVariables["SHADGT_OPENXR_OUTPUT_PERCENT"] == "100" &&
+                  launch.EnvironmentVariables["SHARED_OPENXR_FRAMEGEN"] == "0", "Safe headset defaults");
+            LoaderForm.ApplyGt7HeadsetVisibility(launch);
+            Check(launch.Arguments == "profile=wheel", "Flat launch preserves the game arguments");
+            launch.EnvironmentVariables["SHARED_OPENXR"] = "1";
+            LoaderForm.ApplyGt7HeadsetVisibility(launch);
+            Check(launch.Arguments == "profile=wheel", "Seated screen preserves ordinary culling");
+            launch.EnvironmentVariables["SHADGT_OPENXR_COCKPIT"] = "1";
+            LoaderForm.ApplyGt7HeadsetVisibility(launch);
+            Check(launch.Arguments == "profile=wheel occlusionculling_mode=cpu", "Both cockpit eyes participate in visibility");
+            LoaderForm.ApplyGt7HeadsetSettings(launch, new Dictionary<string, object>
+                { { "openxr_framegen", 6 }, { "openxr_output_percent", 85 }, { "openxr_mirror_eye", "right" } });
+            Check(launch.EnvironmentVariables["SHARED_OPENXR_FRAMEGEN"] == "dlss" &&
+                  launch.EnvironmentVariables["SHADGT_OPENXR_OUTPUT_PERCENT"] == "85" &&
+                  launch.EnvironmentVariables["SHADGT_OPENXR_MIRROR_EYE"] == "right", "Existing VR profiles retain their provider and output");
             // FEAT-GTS-291: each game's settings file is named after its serial.
             Check(GameInfo.GTSport.IniPath(@"X:\g") == @"X:\g\CUSA03220.RyGT.ini" && GameInfo.GT7.IniPath(@"X:\g") == @"X:\g\CUSA24769.RyGT.ini",
                   "<serial>.RyGT.ini");

@@ -50,6 +50,8 @@ namespace RyGT
             // GPU.fsr_enabled, fsr3_enabled, dlss_enabled, rcas_enabled and upscale_quality (the game
             // gets the last as RYGT_UPSCALE_QUALITY).
             var upscaling = Section(graphicsPage, "Upscaling");
+            if (SwitchWalker.KnownNames(root).Contains("SHADGT_OPENXR_COCKPIT"))
+                AddGt7HeadsetSettings(Section(graphicsPage, "OpenXR headset"));
             bool fsr3Installed = File.Exists(Path.Combine(root, "amd_fidelityfx_vk.dll"));
             string dlssDir = Path.Combine(root, "dlss");
             Func<string, DarkComboBox, Label, FlowLayoutPanel> comboRow = (text, combo, note) =>
@@ -770,20 +772,118 @@ namespace RyGT
         }
 
 
+        // FEAT-RT-021: keep the values saved by the legacy GT7 launcher. The display labels
+        // belong to the UI; the renderer receives the keys below at process start.
+        DarkComboBox AddHeadsetChoice(TableLayoutPanel panel, string label, string key,
+                                      string[] values, string[] labels, string fallback)
+        {
+            var box = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 235 };
+            box.Items.AddRange(labels);
+            string stored = ReadStringSetting("GPU", key, fallback);
+            int selected = Array.FindIndex(values, value => string.Equals(value, stored, StringComparison.OrdinalIgnoreCase));
+            box.SelectedIndex = selected >= 0 ? selected : Array.IndexOf(values, fallback);
+            box.SelectedIndexChanged += delegate { SaveHeadsetSetting(key, values[box.SelectedIndex]); };
+            panel.Controls.Add(new SettingRow(label, box));
+            return box;
+        }
+
+        void SaveHeadsetSetting(string key, object value)
+        {
+            try { WriteSetting("GPU", key, value); }
+            catch (Exception e) { MessageBox.Show(this, "Could not save the setting: " + e.Message); }
+        }
+
+        void AddGt7HeadsetSettings(TableLayoutPanel panel)
+        {
+            panel.Controls.Add(Hint("Enable SHARED_OPENXR in Advanced for the seated screen. Enable SHADGT_OPENXR_COCKPIT for native stereo. Restart GT7 after changing headset settings."));
+            var percent = new NumericUpDown { Minimum = 25, Maximum = 100, Increment = 1,
+                Value = HeadsetPercent(ReadIntSetting("GPU", "openxr_output_percent", 100)) };
+            percent.ValueChanged += delegate { SaveHeadsetSetting("openxr_output_percent", (int)percent.Value); };
+            panel.Controls.Add(new SettingRow("Per-eye output (% of recommended size)", percent));
+            var mirror = AddHeadsetChoice(panel, "Desktop mirror", "openxr_mirror_eye",
+                new[] { "left", "right", "both", "off" }, new[] { "Left eye", "Right eye", "Both eyes", "Off" }, "left");
+            var framing = AddHeadsetChoice(panel, "Mirror framing", "openxr_mirror_framing",
+                new[] { "full", "fill", "inset" }, new[] { "Full eye", "Fill window", "Inset crop" }, "full");
+            var method = AddHeadsetChoice(panel, "Reconstruction", "openxr_upscaler",
+                new[] { "off", "fsr", "dlss" }, new[] { "Off", "AMD FSR", "NVIDIA DLSS" }, "off");
+            var quality = AddHeadsetChoice(panel, "Reconstruction quality", "openxr_upscale_quality",
+                new[] { "native", "quality", "balanced", "performance", "ultra_performance" },
+                new[] { "Native AA", "Quality", "Balanced", "Performance", "Ultra performance" }, "quality");
+            var model = AddHeadsetChoice(panel, "DLSS model", "openxr_dlss_model",
+                new[] { "m", "l", "k", "j", "auto" }, new[] { "Model M", "Model L", "Model K", "Model J", "NVIDIA default" }, "m");
+            var detail = AddHeadsetChoice(panel, "DLSS texture detail", "openxr_dlss_texture_detail",
+                new[] { "full", "reduced", "off" }, new[] { "Full", "Reduced", "Game mip bias" }, "full");
+            var frames = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 235 };
+            frames.Items.AddRange(new[] { "Off", "AMD FidelityFX (2×)", "NVIDIA DLSS (2×)" });
+            frames.SelectedIndex = HeadsetGenerator(ReadIntSetting("GPU", "openxr_framegen", 0));
+            frames.SelectedIndexChanged += delegate { SaveHeadsetSetting("openxr_framegen", frames.SelectedIndex); };
+            panel.Controls.Add(new SettingRow("Frame generation", frames));
+            AddHeadsetChoice(panel, "NVIDIA Reflex", "openxr_reflex", new[] { "auto", "off", "on", "boost" },
+                new[] { "Auto (NVIDIA frame generation)", "Off", "On", "On + Boost" }, "auto");
+            Action update = delegate
+            {
+                framing.Enabled = mirror.SelectedIndex != 3;
+                quality.Enabled = method.SelectedIndex != 0;
+                model.Enabled = detail.Enabled = method.SelectedIndex == 2;
+            };
+            mirror.SelectedIndexChanged += delegate { update(); };
+            method.SelectedIndexChanged += delegate { update(); };
+            update();
+        }
+
+        static int HeadsetPercent(object value)
+        {
+            return value is int && (int)value >= 25 && (int)value <= 100 ? (int)value : 100;
+        }
+
+        static int HeadsetGenerator(object value)
+        {
+            int index = value is int ? (int)value : 0;
+            // Older profiles offered NVIDIA 3x through 6x. Use its tested 2x mode.
+            return index >= 0 && index <= 6 ? Math.Min(index, 2) : 0;
+        }
+
+        internal static void ApplyGt7HeadsetSettings(ProcessStartInfo start, IDictionary<string, object> gpu)
+        {
+            Func<string, object> get = key => { object value; return gpu != null && gpu.TryGetValue(key, out value) ? value : null; };
+            var env = start.EnvironmentVariables;
+            env["SHADGT_OPENXR_OUTPUT_PERCENT"] = HeadsetPercent(get("openxr_output_percent")).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            env["SHADGT_OPENXR_MIRROR_EYE"] = get("openxr_mirror_eye") as string ?? "left";
+            env["SHADGT_OPENXR_MIRROR_FRAMING"] = get("openxr_mirror_framing") as string ?? "full";
+            env["SHADGT_OPENXR_UPSCALER"] = get("openxr_upscaler") as string ?? "off";
+            env["SHADGT_OPENXR_UPSCALE_QUALITY"] = get("openxr_upscale_quality") as string ?? "quality";
+            env["SHADGT_OPENXR_DLSS_MODEL"] = get("openxr_dlss_model") as string ?? "m";
+            env["SHADGT_OPENXR_DLSS_TEXTURE_DETAIL"] = get("openxr_dlss_texture_detail") as string ?? "full";
+            env["SHADGT_OPENXR_REFLEX"] = get("openxr_reflex") as string ?? "auto";
+            int generator = HeadsetGenerator(get("openxr_framegen"));
+            env["SHARED_OPENXR_FRAMEGEN"] = generator == 2 ? "dlss" : generator == 1 ? "1" : "0";
+        }
+
+        internal static void ApplyGt7HeadsetVisibility(ProcessStartInfo start)
+        {
+            if (start.EnvironmentVariables["SHARED_OPENXR"] == "1" && start.EnvironmentVariables["SHADGT_OPENXR_COCKPIT"] == "1")
+                start.Arguments = (start.Arguments + " occlusionculling_mode=cpu").TrimStart();
+        }
+
         /// A GPU section setting from the game's settings file, or null.
         static object GpuSetting(string root, string key)
+        {
+            var gpu = ReadGt7GpuSettings(root);
+            object value;
+            return gpu != null && gpu.TryGetValue(key, out value) ? value : null;
+        }
+
+        static Dictionary<string, object> ReadGt7GpuSettings(string root)
         {
             try
             {
                 string path = GameInfo.GT7.ConfigPath(root);
                 var config = new System.Web.Script.Serialization.JavaScriptSerializer()
                     .DeserializeObject(File.ReadAllText(path)) as Dictionary<string, object>;
-                object found, value;
-                var gpu = config != null && config.TryGetValue("GPU", out found) ? found as Dictionary<string, object> : null;
-                if (gpu != null && gpu.TryGetValue(key, out value)) return value;
+                object gpu;
+                return config != null && config.TryGetValue("GPU", out gpu) ? gpu as Dictionary<string, object> : null;
             }
-            catch { }
-            return null;
+            catch { return null; }
         }
 
 
@@ -1351,6 +1451,7 @@ namespace RyGT
                     // renderer region, the CPU saw stale data and culled the whole rear-view mirror.
                     start.EnvironmentVariables["RYGT_NATIVE_INPLACE_FROM"] = "e000000000";
                     start.EnvironmentVariables["SHADGT_FPS_LOCK"] = RaceFpsLock(root).ToString();
+                    ApplyGt7HeadsetSettings(start, ReadGt7GpuSettings(root));
                     // Shader cache size and the AMD graphics fix from the Graphics page.
                     start.EnvironmentVariables["RYGT_DRIVER_CACHE_MAX_MB"] = DriverCacheMaxMb(root).ToString();
                     start.EnvironmentVariables["RYGT_AMD_SINGLE_SAMPLE_BARYCENTRIC"] =
@@ -1415,6 +1516,7 @@ namespace RyGT
                     // FEAT-GTS-254: the Advanced page's switches and other variables last, so they win.
                     int customCount = CustomEnvironment.Apply(start, new Settings(GameInfo.GT7.IniPath(root)).Env);
                     if (customCount > 0) AppendSetupLog(root, GameInfo.GT7.TitleId, customCount + " custom environment variable(s) applied.");
+                    ApplyGt7HeadsetVisibility(start);
                     started = Process.Start(start);
                 }
                 catch (Exception e)
