@@ -145,6 +145,11 @@ compiler-rt, set `LLVM_ROOT`, and run:
 
 ## OpenXR renderer packages on Windows
 
+From a fresh checkout of the VR integration branch, run `./ci/build-openxr-package.ps1`
+in the Windows build environment. It builds the launcher, renderer, runtime, and tools, then
+writes a checked ZIP under `dist`. The fork and exact renderer revision are recorded in
+`renderer/openxr-integration.json` and the ZIP's BUILD_INFO.txt.
+
 FEAT-RT-022 adds an opt-in build using the static Khronos OpenXR loader pinned in
 `ci/runtime-toolchain.json`. With the hosted Windows build environment initialized, run
 `./ci/build-windows.ps1 -Target Renderer -Flavor Release -OpenXr` against an OpenXR-capable
