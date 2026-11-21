@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][ValidateSet('Launcher','Renderer','Runtime','Tools')][string]$Target, [ValidateSet('Release','Diagnostics')][string]$Flavor='Release')
+param([Parameter(Mandatory=$true)][ValidateSet('Launcher','Renderer','Runtime','Tools')][string]$Target, [ValidateSet('Release','Diagnostics')][string]$Flavor='Release', [switch]$OpenXr)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Set-Location (Split-Path $PSScriptRoot -Parent)
@@ -6,6 +6,7 @@ function Invoke-Checked([string]$Program, [string[]]$Arguments) {
     & $Program @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$Program failed with exit code $LASTEXITCODE" }
 }
+if ($OpenXr -and $Target -ne 'Renderer') { throw '-OpenXr is a renderer build option' }
 $suffix = if ($Flavor -eq 'Diagnostics') { '-diagnostics' } else { '' }
 $out = Join-Path (Get-Location) ("artifacts/" + $Target.ToLowerInvariant() + $suffix)
 New-Item -ItemType Directory -Force $out | Out-Null
@@ -152,6 +153,28 @@ if ($Target -eq 'Launcher') {
         Remove-Item Env:SHADGT_BUILD_DESCRIBE -ErrorAction SilentlyContinue
         Write-Warning 'No gt-sport release tag is reachable; the renderer is described by its own commit'
     }
+    # FEAT-RT-022: an opt-in headset package statically links the pinned Khronos loader.
+    # The player's OpenXR runtime is still selected at run time.
+    if ($OpenXr) {
+        $xr = (Get-Content ci/runtime-toolchain.json -Raw | ConvertFrom-Json).openxr_sdk
+        $xrSource = Join-Path (Get-Location) ('build/ci-openxr' + $suffix)
+        Invoke-Checked 'git' @('init', $xrSource)
+        Invoke-Checked 'git' @('-C', $xrSource, 'fetch', '--depth=1', $xr.repository, $xr.commit)
+        Invoke-Checked 'git' @('-C', $xrSource, 'checkout', '--detach', 'FETCH_HEAD')
+        if ((& git -C $xrSource rev-parse HEAD) -cne $xr.commit) { throw 'OpenXR SDK revision mismatch' }
+        $xrBuild = Join-Path $xrSource 'build'
+        $xrInstall = Join-Path $xrBuild 'install'
+        Invoke-Checked 'cmake' @('-S',$xrSource,'-B',$xrBuild,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
+            '-DCMAKE_C_COMPILER=clang-cl','-DCMAKE_CXX_COMPILER=clang-cl','-DDYNAMIC_LOADER=OFF',
+            '-DBUILD_TESTS=OFF','-DBUILD_API_LAYERS=OFF',"-DCMAKE_INSTALL_PREFIX=$xrInstall")
+        Invoke-Checked 'cmake' @('--build', $xrBuild)
+        Invoke-Checked 'cmake' @('--install', $xrBuild)
+        $cmakeArgs += @('-DRYGT_BUILD_OPENXR=ON', "-DOpenXR_DIR=$xrInstall/cmake")
+        @("$($xr.repository) $($xr.commit)", 'Copyright The Khronos Group Inc.',
+          (Get-Content "$xrSource/COPYING.adoc" -Raw), (Get-Content "$xrSource/LICENSES/Apache-2.0.txt" -Raw),
+          (Get-Content "$xrSource/LICENSES/MIT.txt" -Raw), (Get-Content "$xrSource/src/external/jsoncpp/LICENSE" -Raw)) |
+            Set-Content "$out/OpenXR-LICENSE.txt" -Encoding utf8
+    }
     Invoke-Checked 'cmake' $cmakeArgs
     # CMake also exports the emulator's compilation of these same sources.
     # Verify only the object compiled for the packaged renderer target.
@@ -207,6 +230,7 @@ int rygt_ndebug_probe(void) { return 0; }
         ryty_zlib='libSceZlib.prx'; ryty_discmap='libSceDiscMap.prx'; ryty_screenshot='libSceScreenShot.prx'; ryty_np='libSceNpAuth.prx' }
     # FEAT-GTS-280: ryty-feel-test, the launcher's HD rumble Test buttons, packaged in tools\.
     $rendererTools = [ordered]@{ ryty_feel_test='ryty-feel-test.exe' }
+    if ($OpenXr) { $rendererTools['rygt_openxr_info'] = 'rygt_openxr_info.exe' }
     Invoke-Checked 'cmake' (@('--build',"$source/Build/ci",'--target','ryty_gpu') + @($rendererLibraries.Keys) + @($rendererTools.Keys) + @('--parallel','2'))
     foreach ($library in @($rendererLibraries.Values) + @($rendererTools.Values)) {
         $built = @(Get-ChildItem "$source/Build/ci" -Recurse -Filter $library)
@@ -253,7 +277,9 @@ if ($Flavor -eq 'Diagnostics' -and $Target -ne 'Runtime') {
 $commit = & git rev-parse HEAD
 if ($LASTEXITCODE) { throw 'Cannot record source revision' }
 $commit | Set-Content "$out/RYGT-COMMIT.txt"
-@{schema=1;flavor=$Flavor;commit=$commit;optimized=$true;full_symbols=($Flavor -eq 'Diagnostics')} | ConvertTo-Json | Set-Content "$out/BUILD-PROFILE.json"
+$profileData = @{schema=1;flavor=$Flavor;commit=$commit;optimized=$true;full_symbols=($Flavor -eq 'Diagnostics')}
+if ($OpenXr) { $profileData['openxr_sdk'] = $xr.commit }
+$profileData | ConvertTo-Json | Set-Content "$out/BUILD-PROFILE.json"
 Get-ChildItem $out -File | Where-Object Name -ne 'SHA256SUMS.txt' | ForEach-Object {
     $hash = Get-FileHash $_.FullName -Algorithm SHA256
     "$($hash.Hash.ToLowerInvariant())  $($_.Name)"
