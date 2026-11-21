@@ -25,7 +25,9 @@ ways, both kept now:
   Sport, written `gt7=0x80550006` after the NID: a line may end in `gt7=<value>`, the function's result
   under GT7 (the game is told apart as `core/libs/GameSerial.hpp` does).
 
-Otherwise the list is the same as GT7's stub, export for export.
+FIX-RT-026: existing conversions may import ten SaveData NIDs through Mbus. These exports forward
+the arguments and result to the loaded `libSceSaveData.prx` so mount, metadata, and livery
+operations share state with the other save calls. A missing provider returns a SaveData error.
 
 FIX-RT-003: a line may end in `wait=timeval` instead: the function's first argument points to a PS4
 timeval and it sleeps that long (at most 100 ms) before returning 0. `libSceUsbd +wU6CGuZcWk`
