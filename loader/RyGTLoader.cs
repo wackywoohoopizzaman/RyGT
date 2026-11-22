@@ -1489,6 +1489,17 @@ namespace RyGT
             return output;
         }
 
+        // FIX-RT-024
+        internal static void OmitMissingSectionTable(byte[] elf, int reconstructedSize)
+        {
+            ulong offset = BitConverter.ToUInt64(elf, 0x28);
+            ulong size = (ulong)reconstructedSize;
+            ulong length = (ulong)BitConverter.ToUInt16(elf, 0x3a) * BitConverter.ToUInt16(elf, 0x3c);
+            if (offset == 0 || (offset <= size && length <= size - offset)) return;
+            Array.Clear(elf, 0x28, 8);
+            Array.Clear(elf, 0x3a, 6);
+        }
+
         /// Rewrites PT_SCE_RELRO (0x61000010) as a read-write PT_LOAD so the converter maps it and
         /// allows relocations into it.
         public static byte[] RelroToLoad(byte[] elf)
@@ -3987,6 +3998,7 @@ namespace RyGT
             byte[] elf;
             try { elf = Self.RelroToLoad(Self.ToElf(bytes, Path.GetFileName(source))); }
             catch (DumpFileException e) { throw new DumpFileException(source, e.Message); }
+            int reconstructedSize = elf.Length;
             if (target == GameKind.GT7 && Path.GetFileName(source).Equals("eboot.bin", StringComparison.OrdinalIgnoreCase) && GameLayout.PatchKnownExecutable(elf))
                 Log("Applied the verified CUSA24769 1.00 conversion fix.");
             if (offline != null)
@@ -3994,6 +4006,7 @@ namespace RyGT
                 elf = offline.ExtendLayout(elf);
                 Log("Extended the executable's segments for the " + OfflinePatch.GroupName + " patch.");
             }
+            if (!Self.IsElf(bytes)) Self.OmitMissingSectionTable(elf, reconstructedSize);
             File.WriteAllBytes(destination, elf);
             Log("Prepared " + Path.GetFileName(destination) + " from " + source);
         }

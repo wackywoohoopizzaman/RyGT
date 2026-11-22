@@ -6,6 +6,10 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
+## 0.3.16 - 2026-11-22
+
+* FIX-RT-024: Set up accepts stripped SELF files whose section table was removed.
+
 ## 0.3.12 - 2026-11-21
 
 * FIX-RT-022: GT7's Shaders page offers GT Sport's "Precompile shaders on the splash screen" instead of

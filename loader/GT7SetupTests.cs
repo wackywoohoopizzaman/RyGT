@@ -135,6 +135,21 @@ namespace RyGT
             string baseDir = Path.Combine(root, "base"), update = Path.Combine(root, "update");
             try
             {
+                var stripped = new byte[256];
+                BitConverter.GetBytes((ulong)192).CopyTo(stripped, 0x28);
+                BitConverter.GetBytes((ushort)64).CopyTo(stripped, 0x3a);
+                BitConverter.GetBytes((ushort)1).CopyTo(stripped, 0x3c);
+                BitConverter.GetBytes((ushort)1).CopyTo(stripped, 0x3e);
+                var preserved = (byte[])stripped.Clone();
+                Self.OmitMissingSectionTable(stripped, stripped.Length);
+                Check(stripped.SequenceEqual(preserved), "Preserve a complete ELF section table");
+                Self.OmitMissingSectionTable(stripped, 224);
+                Check(BitConverter.ToUInt64(stripped, 0x28) == 0 && BitConverter.ToUInt32(stripped, 0x3a) == 0 &&
+                      BitConverter.ToUInt16(stripped, 0x3e) == 0, "Drop section table beyond the reconstructed SELF");
+                var overflowing = (byte[])preserved.Clone();
+                BitConverter.GetBytes(ulong.MaxValue).CopyTo(overflowing, 0x28);
+                Self.OmitMissingSectionTable(overflowing, overflowing.Length);
+                Check(BitConverter.ToUInt64(overflowing, 0x28) == 0, "Handle an overflowing section table end");
                 Dump(baseDir);
                 var merged = new GameLayout(baseDir, null, runtime);
                 Check(merged.Version == "01.00", "Merged version");
