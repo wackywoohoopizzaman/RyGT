@@ -53,6 +53,14 @@ guest frames. `RygtDlss_GetOptimalSettings` returns the supported input range fo
 quality mode; inputs outside that range are rejected. Current renderer limitations are recorded
 in [technical debt](../../docs/dev/TechnicalDebt.md#functional).
 
+## Stereo frame generation
+
+FEAT-RT-027 adds optional midpoint generation for GT7's stereo output. Each eye supplies its
+finished color, prepared depth and motion, seated pose, and frustum tangents. The renderer owns
+the images, layout transitions and submission timing. Reset on a discontinuity or recenter.
+The two eye histories are independent of desktop reconstruction. The indexed entry accepts
+one midpoint (count and index both 1), and the original midpoint entry uses the same path.
+
 ## Build
 
 You need clang-cl, Visual Studio's C++ libraries, NVIDIA's DLSS SDK
