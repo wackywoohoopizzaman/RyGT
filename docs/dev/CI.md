@@ -142,3 +142,12 @@ compiler-rt, set `LLVM_ROOT`, and run:
 ./ci/build-windows.ps1 -Target Launcher -Flavor Diagnostics
 ./ci/build-windows.ps1 -Target Renderer -Flavor Diagnostics
 ```
+
+## OpenXR renderer packages on Windows
+
+FEAT-RT-029 adds an opt-in build using the static Khronos OpenXR loader pinned in
+`ci/runtime-toolchain.json`. With the hosted Windows build environment initialized, run
+`./ci/build-windows.ps1 -Target Renderer -Flavor Release -OpenXr` against an OpenXR-capable
+renderer revision in `renderer/source.json`. The Diagnostics flavor accepts the same switch.
+Run the usual Launcher, Runtime, Tools and packaging steps. The package records the loader
+revision in BUILD_INFO.txt and includes its license and the headset probe in tools.

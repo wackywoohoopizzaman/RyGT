@@ -271,6 +271,14 @@ def assemble(commit, flavor, channel, suffix):
         place(verify_artifact(renderer_folder, tool_name, commit), 'tools/' + tool_name)
     place(verify_artifact(renderer_folder, DLSS_PLUGIN, commit), 'dlss/' + DLSS_PLUGIN)
     place(verify_artifact(renderer_folder, DLSS_LICENSE, commit, 'data'), DLSS_LICENSE)
+    renderer_profile = json.loads(verify_artifact(renderer_folder, 'BUILD-PROFILE.json', commit, 'data').read_text(encoding='utf-8-sig'))
+    xr_commit = renderer_profile.get('openxr_sdk')
+    if xr_commit is not None:
+        xr = json.loads((root / 'ci/runtime-toolchain.json').read_text())['openxr_sdk']
+        if xr_commit != xr['commit'] or b'SHARED_OPENXR\x00' not in renderer.read_bytes():
+            raise RuntimeError('OpenXR renderer or SDK mismatch')
+        place(verify_artifact(renderer_folder, 'OpenXR-LICENSE.txt', commit, 'data'), 'OpenXR-LICENSE.txt')
+        place(verify_artifact(renderer_folder, 'rygt_openxr_info.exe', commit), 'tools/rygt_openxr_info.exe')
     tools_folder = Path('artifacts/tools')
     for file in TOOLS_FILES:
         kind = 'pe' if file.endswith(('.exe', '.dll')) else 'data'
@@ -311,6 +319,10 @@ def assemble(commit, flavor, channel, suffix):
                       [relative for _, relative in GT7_RUNTIME_FILES],
             downloaded=['amd_fidelityfx_vk.dll', 'amd_fidelityfx_vk-LICENSE.txt', DLSS_LICENSE],
             repository=[relative for _, relative in REPOSITORY_FILES + tuple(tree_files)]))
+    if xr_commit is not None:
+        provenance['openxr_sdk'] = xr
+        provenance['sources']['built'].append('tools/rygt_openxr_info.exe')
+        provenance['sources']['downloaded'].append('OpenXR-LICENSE.txt')
     if suffix:
         # PDBs are not packaged. Only these explicitly verified same-build
         # symbols are admitted to debug-ci, adjacent to their matching modules.

@@ -1,4 +1,8 @@
 {
+  "openxr_sdk": {
+    "repository": "https://github.com/KhronosGroup/OpenXR-SDK.git",
+    "commit": "c15d38cb4bb10a5b7e075f74493ff13896e2597a"
+  },
   "repository": "https://repo.msys2.org/mingw/ucrt64/",
   "cutoff": "2026-11-08",
   "packages": [
