@@ -25,12 +25,17 @@ ways, both kept now:
   Sport, written `gt7=0x80550006` after the NID: a line may end in `gt7=<value>`, the function's result
   under GT7 (the game is told apart as `core/libs/GameSerial.hpp` does).
 
-Otherwise the list is the same as GT7's stub, export for export.
+FIX-RT-026: existing conversions may import ten SaveData NIDs through Mbus. These exports forward
+the arguments and result to the loaded `libSceSaveData.prx` so mount, metadata, and livery
+operations share state with the other save calls. A missing provider returns a SaveData error.
 
 FIX-RT-003: a line may end in `wait=timeval` instead: the function's first argument points to a PS4
 timeval and it sleeps that long (at most 100 ms) before returning 0. `libSceUsbd +wU6CGuZcWk`
 (`sceUsbdHandleEventsTimeout`) is one: GT7's `USBEV` thread calls it in a loop, and while it returned at
 once that thread spun one core for the whole session.
+
+FIX-RT-025: the wheel module in the CUSA24769 01.00 conversion also imports
+`libSceUsbd EkqGLxWC-S0`. Export it from the USB placeholder so the module can load.
 
 To implement one of these libraries for real, add it under `core/libs/prx/` and delete its list here.
 

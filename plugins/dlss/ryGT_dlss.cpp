@@ -7,6 +7,8 @@
 
 #include <windows.h>
 
+#include <DirectXMath.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -21,6 +23,7 @@
 
 #include "nvsdk_ngx_helpers.h"
 #include "nvsdk_ngx_helpers_vk.h"
+#include "nvsdk_ngx_helpers_dlssg_vk.h"
 #include "nvsdk_ngx_vk.h"
 
 namespace {
@@ -45,6 +48,25 @@ VkPhysicalDevice g_physical_device = VK_NULL_HANDLE;
 VkDevice g_device = VK_NULL_HANDLE;
 bool g_initialized = false;
 NVSDK_NGX_Parameter* g_params = nullptr;
+// FEAT-RT-027: each stereo eye owns its NGX feature and camera history.
+struct EyeGenerator {
+    NVSDK_NGX_Handle* feature{};
+    NVSDK_NGX_Parameter* params{};
+    uint32_t width{}, height{};
+    uint32_t input_width{}, input_height{};
+    VkFormat color_format{};
+    bool has_history{};
+    DirectX::XMFLOAT4X4 last_world_to_clip{};
+};
+EyeGenerator generators[2];
+
+bool XrGenerationRequested() {
+    char enabled[2], method[5];
+    return GetEnvironmentVariableA("SHARED_OPENXR", enabled, sizeof(enabled)) == 1 && enabled[0] == '1' &&
+           GetEnvironmentVariableA("SHARED_OPENXR_FRAMEGEN", method, sizeof(method)) == 4 &&
+           std::strcmp(method, "dlss") == 0;
+}
+
 RygtDlss::ModeCache<NVSDK_NGX_PerfQuality_Value> modeCache;
 
 // Device functions the plugin itself uses.
@@ -405,6 +427,19 @@ __declspec(dllexport) int VKAPI_CALL RygtDlss_GetInstanceExtensions(uint32_t* co
     }
     g_instance_extensions.clear();
     for (uint32_t i = 0; i < n; ++i) g_instance_extensions.emplace_back(props[i].extensionName);
+    if (XrGenerationRequested()) {
+        auto fg = info;
+        fg.FeatureID = NVSDK_NGX_Feature_FrameGeneration;
+        n = 0;
+        props = nullptr;
+        if (NVSDK_NGX_SUCCEED(NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements(&fg, &n, &props))) {
+            for (uint32_t i = 0; i < n; ++i) {
+                const char* extension = props[i].extensionName;
+                if (std::find(g_instance_extensions.begin(), g_instance_extensions.end(), extension) == g_instance_extensions.end())
+                    g_instance_extensions.emplace_back(extension);
+            }
+        }
+    }
     g_instance_extension_ptrs.clear();
     for (auto& e : g_instance_extensions) g_instance_extension_ptrs.push_back(e.c_str());
     *count = static_cast<uint32_t>(g_instance_extension_ptrs.size());
@@ -428,6 +463,19 @@ __declspec(dllexport) int VKAPI_CALL RygtDlss_GetDeviceExtensions(VkInstance ins
     }
     g_device_extensions.clear();
     for (uint32_t i = 0; i < n; ++i) g_device_extensions.emplace_back(props[i].extensionName);
+    if (XrGenerationRequested()) {
+        auto fg = info;
+        fg.FeatureID = NVSDK_NGX_Feature_FrameGeneration;
+        n = 0;
+        props = nullptr;
+        if (NVSDK_NGX_SUCCEED(NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements(instance, physical_device, &fg, &n, &props))) {
+            for (uint32_t i = 0; i < n; ++i) {
+                const char* extension = props[i].extensionName;
+                if (std::find(g_device_extensions.begin(), g_device_extensions.end(), extension) == g_device_extensions.end())
+                    g_device_extensions.emplace_back(extension);
+            }
+        }
+    }
     g_device_extension_ptrs.clear();
     for (auto& e : g_device_extensions) g_device_extension_ptrs.push_back(e.c_str());
     *count = static_cast<uint32_t>(g_device_extension_ptrs.size());
@@ -714,7 +762,128 @@ __declspec(dllexport) int VKAPI_CALL RygtDlss_EvaluateTemporal(VkCommandBuffer c
     return 0;
 }
 
+__declspec(dllexport) unsigned VKAPI_CALL RygtDlss_MaxGeneratedFrames(void) {
+    return 1; // One generated stereo midpoint per rendered pair (2x).
+}
+
+__declspec(dllexport) int VKAPI_CALL RygtDlss_GenerateEyeIndexed(VkCommandBuffer cmd, const RygtDlssEyeFrame* f,
+                                                                 unsigned count, unsigned index) {
+    using namespace DirectX;
+    if (!g_initialized || !cmd || !f || f->eye >= 2 || count != 1 || index != 1) return 1;
+    const auto valid = [](const RygtDlssImage& image) {
+        return image.image && image.view && image.width && image.height && image.format != VK_FORMAT_UNDEFINED;
+    };
+    if (!valid(f->color) || !valid(f->depth) || !valid(f->motion) || !valid(f->output) ||
+        f->color.width != f->output.width || f->color.height != f->output.height ||
+        f->depth.width != f->motion.width || f->depth.height != f->motion.height ||
+        !(f->tangents[1] > f->tangents[0] && f->tangents[2] > f->tangents[3])) {
+        SetError("Invalid stereo frame-generation inputs");
+        return 1;
+    }
+    auto& eye = generators[f->eye];
+    if (!eye.params) {
+        const auto r = NVSDK_NGX_VULKAN_GetCapabilityParameters(&eye.params);
+        int available = 0;
+        if (NVSDK_NGX_FAILED(r) || !eye.params ||
+            NVSDK_NGX_FAILED(eye.params->Get(NVSDK_NGX_Parameter_FrameGeneration_Available, &available)) || !available) {
+            if (eye.params) NVSDK_NGX_VULKAN_DestroyParameters(eye.params);
+            eye.params = nullptr;
+            SetError("NGX frame generation unavailable");
+            return 1;
+        }
+    }
+    if (eye.feature && (eye.width != f->output.width || eye.height != f->output.height ||
+                        eye.input_width != f->depth.width || eye.input_height != f->depth.height ||
+                        eye.color_format != f->color.format)) {
+        NVSDK_NGX_VULKAN_ReleaseFeature(eye.feature);
+        eye.feature = nullptr;
+    }
+    if (!eye.feature) {
+        NVSDK_NGX_DLSSG_Create_Params create{f->output.width, f->output.height, uint32_t(f->color.format),
+                                             f->depth.width,  f->depth.height,  false};
+        auto r = NGX_VK_CREATE_DLSSG(cmd, 1, 1, &eye.feature, eye.params, &create);
+        if (NVSDK_NGX_FAILED(r) || !eye.feature) {
+            SetError("NGX eye generator creation failed: " + ResultText(r));
+            return 1;
+        }
+        eye.width = f->output.width;
+        eye.height = f->output.height;
+        eye.input_width = f->depth.width;
+        eye.input_height = f->depth.height;
+        eye.color_format = f->color.format;
+        eye.has_history = false;
+    }
+    auto texture = [](const RygtDlssImage& im, bool writable = false) {
+        const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        return NVSDK_NGX_Create_ImageView_Resource_VK(im.view, im.image, range, im.format, im.width, im.height, writable);
+    };
+    auto color = texture(f->color), mv = texture(f->motion), depth = texture(f->depth), output = texture(f->output, true);
+    NVSDK_NGX_VK_DLSSG_Eval_Params eval{};
+    eval.pBackbuffer = &color;
+    eval.pDepth = &depth;
+    eval.pMVecs = &mv;
+    eval.pOutputInterpFrame = &output;
+    NVSDK_NGX_DLSSG_Opt_Eval_Params o{};
+    o.multiFrameCount = count;
+    o.multiFrameIndex = index;
+    o.reset = f->reset != 0 || !eye.has_history;
+    o.cameraMotionIncluded = o.depthInverted = true;
+    o.cameraNear = .1f;
+    o.cameraFar = 1000.f;
+    o.cameraAspectRatio = float(eye.width) / eye.height;
+    const auto* t = f->tangents;
+    o.cameraFOV = std::atan(t[2]) - std::atan(t[3]);
+    o.mvecScale[0] = o.mvecScale[1] = 1;
+    o.mvecsSubrectSize = o.depthSubrectSize = {f->depth.width, f->depth.height};
+    o.backbufferSubrectSize = o.outputInterpSubrectSize = {eye.width, eye.height};
+    o.motionVectorsInvalidValue = -32768.f;
+    const XMVECTOR rotation = XMVectorSet(f->orientation[0], f->orientation[1], f->orientation[2], f->orientation[3]);
+    const XMMATRIX pose = XMMatrixRotationQuaternion(rotation) * XMMatrixTranslation(f->position[0], f->position[1], f->position[2]);
+    // OpenXR looks along -Z. Swap the projection depths for GT7's reversed depth.
+    const float n = o.cameraNear, z = o.cameraFar;
+    const XMMATRIX projection = XMMatrixSet(2 / (t[1] - t[0]), 0, 0, 0, 0, 2 / (t[2] - t[3]), 0, 0, (t[1] + t[0]) / (t[1] - t[0]),
+                                            (t[2] + t[3]) / (t[2] - t[3]), n / (z - n), -1, 0, 0, z * n / (z - n), 0);
+    const auto world_to_clip = XMMatrixInverse(nullptr, pose) * projection;
+    const auto clip_to_prev =
+        o.reset ? XMMatrixIdentity() : XMMatrixInverse(nullptr, world_to_clip) * XMLoadFloat4x4(&eye.last_world_to_clip);
+    auto matrix = [](float(&dst)[4][4], FXMMATRIX m) {
+        XMFLOAT4X4 v;
+        XMStoreFloat4x4(&v, m);
+        std::memcpy(dst, v.m, sizeof(dst));
+    };
+    matrix(o.cameraViewToClip, projection);
+    matrix(o.clipToCameraView, XMMatrixInverse(nullptr, projection));
+    matrix(o.clipToLensClip, XMMatrixIdentity());
+    matrix(o.clipToPrevClip, clip_to_prev);
+    matrix(o.prevClipToClip, XMMatrixInverse(nullptr, clip_to_prev));
+
+    for (int i = 0; i < 3; ++i) {
+        o.cameraPos[i] = f->position[i];
+        o.cameraRight[i] = XMVectorGetByIndex(pose.r[0], i);
+        o.cameraUp[i] = XMVectorGetByIndex(pose.r[1], i);
+        o.cameraFwd[i] = -XMVectorGetByIndex(pose.r[2], i);
+    }
+    auto r = NGX_VK_EVALUATE_DLSSG(cmd, eye.feature, eye.params, &eval, &o);
+    if (NVSDK_NGX_FAILED(r)) {
+        eye.has_history = false;
+        SetError("NGX eye generation failed: " + ResultText(r));
+        return 1;
+    }
+    XMStoreFloat4x4(&eye.last_world_to_clip, world_to_clip);
+    eye.has_history = true;
+    return 0;
+}
+
+__declspec(dllexport) int VKAPI_CALL RygtDlss_GenerateEye(VkCommandBuffer cmd, const RygtDlssEyeFrame* f) {
+    return RygtDlss_GenerateEyeIndexed(cmd, f, 1, 1);
+}
+
 __declspec(dllexport) void VKAPI_CALL RygtDlss_Shutdown(void) {
+    for (auto& eye : generators) {
+        if (eye.feature) NVSDK_NGX_VULKAN_ReleaseFeature(eye.feature);
+        if (eye.params) NVSDK_NGX_VULKAN_DestroyParameters(eye.params);
+        eye = {};
+    }
     modeCache.Reset();
     ReleaseAllFeatures();
     if (g_params) {
